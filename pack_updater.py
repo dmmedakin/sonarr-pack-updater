@@ -34,6 +34,8 @@ HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE", "/tmp/heartbeat")
 RUN_ONCE = os.environ.get("RUN_ONCE", "false").lower() in ("1", "true", "yes")
 # После старта ждём, пока Sonarr перечитает очередь из торрент-клиента (важно при перезапуске стека)
 STARTUP_DELAY = int(os.environ.get("STARTUP_DELAY", "300"))
+# Если Sonarr недоступен, следующий проход — через столько минут, а не через INTERVAL_HOURS
+RETRY_MINUTES = float(os.environ.get("RETRY_MINUTES", "10"))
 
 # Отказы, которые означают только «часть серий уже есть»
 ALLOWED_REJECTION = re.compile(r"^(Existing file|Existing files)", re.I)
@@ -274,11 +276,13 @@ def main():
         beat()
         try:
             run_once(state)
+            pause = INTERVAL_HOURS * 3600
         except Exception as e:
-            log(f"Ошибка прохода: {e}")
+            pause = RETRY_MINUTES * 60
+            log(f"Ошибка прохода: {e}. Повтор через {RETRY_MINUTES:g} мин.")
         if RUN_ONCE:
             break
-        time.sleep(INTERVAL_HOURS * 3600)
+        time.sleep(pause)
 
 
 if __name__ == "__main__":

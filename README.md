@@ -46,6 +46,7 @@ Every pass logs each season it checks, each release it sends to Sonarr (`Отп�
 | `MAX_SEASONS_PER_RUN` | `15` | Upper limit of season searches per pass |
 | `PAUSE_BETWEEN_SEARCHES` | `20` | Seconds between season searches, to be gentle with trackers |
 | `STARTUP_DELAY` | `300` | Seconds to wait after start before the first pass, so Sonarr has re-read its download client queue (matters when the whole stack restarts) |
+| `RETRY_MINUTES` | `10` | Minutes until the next pass when Sonarr could not be reached |
 | `RUN_ONCE` | `false` | Do one pass and exit |
 
 State (what has been grabbed) is kept in `/data/state.json`. The container reports unhealthy if passes stop starting.
