@@ -54,7 +54,7 @@ Every pass logs each season it checks (with the most common rejection reasons wh
 | `LOOKBACK_DAYS` | `60` | Only episodes that aired within this many days |
 | `MAX_SEASONS_PER_RUN` | `15` | Upper limit of season searches per pass |
 | `PAUSE_BETWEEN_SEARCHES` | `20` | Seconds between season searches, to be gentle with trackers |
-| `STARTUP_DELAY` | `300` | Seconds to wait after start before the first pass, so Sonarr has re-read its download client queue (matters when the whole stack restarts) |
+| `STARTUP_DELAY` | `300` | If Sonarr or Radarr started less than this many seconds ago, wait until they have been up that long (they need time to re-read the download client queue). Otherwise the first pass starts right away, so the container itself can be restarted at any time; progress is kept in `/data/state.json` |
 | `RETRY_MINUTES` | `10` | Minutes until the next pass when Sonarr could not be reached |
 | `MIN_SEEDERS` | `3` | Minimum seeders for `Unknown Series` releases |
 | `RADARR_URL` | — | Radarr address; leave empty to skip movies |

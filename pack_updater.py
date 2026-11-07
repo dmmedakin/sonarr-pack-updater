@@ -35,7 +35,9 @@ PAUSE_BETWEEN_SEARCHES = int(os.environ.get("PAUSE_BETWEEN_SEARCHES", "20"))
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE", "/tmp/heartbeat")
 RUN_ONCE = os.environ.get("RUN_ONCE", "false").lower() in ("1", "true", "yes")
-# После старта ждём, пока Sonarr перечитает очередь из торрент-клиента (важно при перезапуске стека)
+# Если Sonarr/Radarr запущены меньше STARTUP_DELAY секунд назад, ждём остаток: им нужно время,
+# чтобы перечитать очередь из торрент-клиента (иначе она выглядит пустой). Если они работают
+# дольше — проход начинается сразу, так что сам сервис можно перезапускать в любой момент.
 STARTUP_DELAY = int(os.environ.get("STARTUP_DELAY", "300"))
 # Если Sonarr недоступен, следующий проход — через столько минут, а не через INTERVAL_HOURS
 RETRY_MINUTES = float(os.environ.get("RETRY_MINUTES", "10"))
@@ -409,6 +411,34 @@ def run_once(state):
     run_missing(state, set(seasons))
 
 
+def app_uptime(request):
+    """Сколько секунд приложение уже работает (по startTime из /system/status); None — неизвестно."""
+    try:
+        started = parse_dt(request("/system/status").get("startTime"))
+    except Exception:
+        return None   # недоступно — тогда тоже ждём
+    return (datetime.now(timezone.utc) - started).total_seconds() if started else None
+
+
+def wait_for_apps():
+    apps = [("Sonarr", call)] + ([("Radarr", rcall)] if RADARR_URL else [])
+    while True:
+        waits = []
+        for name, request in apps:
+            up = app_uptime(request)
+            if up is None:
+                waits.append((name, 60, "недоступен"))
+            elif up < STARTUP_DELAY:
+                waits.append((name, STARTUP_DELAY - up, f"запущен {int(up)} с назад"))
+        if not waits:
+            return
+        pause = max(30, min(w for _, w, _ in waits))
+        log("Жду " + ", ".join(f"{n} ({why})" for n, _, why in waits)
+            + f": следующая проверка через {int(pause)} с")
+        beat()
+        time.sleep(pause)
+
+
 def beat():
     """Отметка для HEALTHCHECK: контейнер жив и проходы идут."""
     try:
@@ -431,8 +461,7 @@ def main():
     state.setdefault("searched", {})
     beat()
     if STARTUP_DELAY and not RUN_ONCE:
-        log(f"Жду {STARTUP_DELAY} с, пока Sonarr перечитает очередь…")
-        time.sleep(STARTUP_DELAY)
+        wait_for_apps()
     while True:
         beat()
         try:

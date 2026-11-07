@@ -127,6 +127,9 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         path = url.path
+        if path.endswith("/system/status"):
+            started = now - timedelta(seconds=int(os.environ.get("MOCK_UPTIME", "3600")))
+            return self.send({"startTime": started.strftime("%Y-%m-%dT%H:%M:%SZ")})
         if self.server.server_port == RADARR_PORT:
             if path.endswith("/wanted/missing"):
                 return self.send({"page": 1, "totalRecords": len(MOVIES), "records": MOVIES})
