@@ -55,13 +55,17 @@ jobs:
           mkdir -m 777 data
           docker run --rm --network host -u 1000:1000 -v "$PWD/data:/data" \
             -e SONARR_URL=http://127.0.0.1:18989 -e SONARR_API_KEY=testkey \
+            -e RADARR_URL=http://127.0.0.1:17878 -e RADARR_API_KEY=testkey \
             -e RUN_ONCE=true -e PAUSE_BETWEEN_SEARCHES=0 \
             sonarr-pack-updater:test | tee run.log
           cat mock.log
           grep -q 'Отправлено на скачивание: Always Sunny S18' run.log
           grep -q 'POST /api/v3/release {"guid": "https://tracker/topic?t=111"' mock.log
           grep -q 'POST /api/v3/release {"guid": "https://tracker/topic?t=444", "indexerId": 5, "seriesId": 26}' mock.log
-          [ "$(grep -c '^POST' mock.log)" = 2 ] || { echo "expected exactly two grabs"; exit 1; }
+          grep -q 'POST /api/v3/release {"guid": "https://tracker/topic?t=888"' mock.log
+          [ "$(grep -c '^POST' mock.log)" = 3 ] || { echo "expected exactly three grabs"; exit 1; }
+          grep -q 'RADARR POST /api/v3/command {"name": "MoviesSearch", "movieIds": \[50\]}' mock.log
+          [ "$(grep -c '^RADARR' mock.log)" = 1 ] || { echo "expected exactly one Radarr search"; exit 1; }
           grep -q 'DELETE /api/v3/queue/bulk.*removeFromClient=false.*\[101, 102, 103\]' mock.log
           [ "$(grep -c '^DELETE' mock.log)" = 1 ] || { echo "expected exactly one queue cleanup"; exit 1; }
           test -s data/state.json

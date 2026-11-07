@@ -10,6 +10,11 @@ Sonarr rejects such an updated pack as a whole, because the episodes it already 
    Releases that Sonarr rejects as `Unknown Series` — typically because the series is called "Name (2026)" in Sonarr while trackers write just "Name" — are also considered, only if nothing Sonarr matched itself fits: the title must contain the series name **and** its year, the parsed season must match, the quality must be allowed by the series' profile and there must be at least `MIN_SEEDERS` seeders (Sonarr stops checking such releases, so the service checks this itself). They are grabbed with the series set explicitly, like choosing the series by hand in interactive search.
 4. removes finished downloads from Sonarr's queue when every episode in them is on disk and the only complaint left is "Not an upgrade". The torrent keeps seeding.
 
+Once a day (`MISSING_SEARCH_HOURS`) it also goes after missing items that Sonarr and Radarr never search for again on their own — both only watch RSS after an item is added:
+
+- **Sonarr:** monitored seasons whose missing episodes aired before `LOOKBACK_DAYS`, a few per day (`MISSING_SEASONS_PER_RUN`), least recently checked first, with the same logic as above.
+- **Radarr** (when `RADARR_URL` is set): monitored movies that are available but have no file, a few per day (`MISSING_MOVIES_PER_RUN`), least recently searched first, using Radarr's own search. Movies already in Radarr's queue are skipped.
+
 When the updated pack lands in the same folder as the previous one, qBittorrent checks the files already there and downloads only the new episodes. Seasons that already have something in Sonarr's queue are skipped, and the same version of a release (guid + size) is never grabbed twice.
 
 Logs are in Russian. Not affiliated with Sonarr.
@@ -27,11 +32,14 @@ services:
     environment:
       SONARR_URL: http://sonarr:8989
       SONARR_CONFIG: /sonarr/config.xml   # or SONARR_API_KEY: ...
+      RADARR_URL: http://radarr:7878      # optional: daily search for missing movies
+      RADARR_CONFIG: /radarr/config.xml   # or RADARR_API_KEY: ...
       INTERVAL_HOURS: "3"
       LOOKBACK_DAYS: "60"
     volumes:
       - ./pack-updater:/data
       - /path/to/sonarr/config.xml:/sonarr/config.xml:ro
+      - /path/to/radarr/config.xml:/radarr/config.xml:ro
     restart: unless-stopped
 ```
 
@@ -49,6 +57,12 @@ Every pass logs each season it checks (with the most common rejection reasons wh
 | `STARTUP_DELAY` | `300` | Seconds to wait after start before the first pass, so Sonarr has re-read its download client queue (matters when the whole stack restarts) |
 | `RETRY_MINUTES` | `10` | Minutes until the next pass when Sonarr could not be reached |
 | `MIN_SEEDERS` | `3` | Minimum seeders for `Unknown Series` releases |
+| `RADARR_URL` | — | Radarr address; leave empty to skip movies |
+| `RADARR_API_KEY` | — | API key; if empty it is read from `RADARR_CONFIG` |
+| `RADARR_CONFIG` | `/radarr/config.xml` | Radarr's `config.xml`, mounted read-only |
+| `MISSING_SEARCH_HOURS` | `24` | Hours between searches for older missing seasons and missing movies |
+| `MISSING_SEASONS_PER_RUN` | `10` | Older seasons checked per missing search |
+| `MISSING_MOVIES_PER_RUN` | `20` | Movies searched per missing search |
 | `RUN_ONCE` | `false` | Do one pass and exit |
 
 State (what has been grabbed) is kept in `/data/state.json`. The container reports unhealthy if passes stop starting.

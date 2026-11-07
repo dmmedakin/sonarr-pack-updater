@@ -11,6 +11,9 @@ Sonarr отклоняет обновлённую раздачу целиком, 
   3. отправляет её в Sonarr на скачивание (как ручной выбор в интерактивном поиске);
   4. убирает из очереди загрузки, у которых новые серии импортированы, а старые
      висят с «Not an upgrade».
+Раз в сутки дополнительно ищет пропущенное, до которого Sonarr и Radarr сами не
+возвращаются: старые сезоны с недостающими сериями (той же логикой) и вышедшие, но не
+скачанные фильмы в Radarr.
 Только стандартная библиотека Python.
 """
 import json
@@ -38,6 +41,14 @@ STARTUP_DELAY = int(os.environ.get("STARTUP_DELAY", "300"))
 RETRY_MINUTES = float(os.environ.get("RETRY_MINUTES", "10"))
 # Минимум сидов для раздач, которые Sonarr не сопоставил с сериалом (его собственная проверка до них не доходит)
 MIN_SEEDERS = int(os.environ.get("MIN_SEEDERS", "3"))
+# Radarr: включается, если задан RADARR_URL
+RADARR_URL = os.environ.get("RADARR_URL", "").rstrip("/")
+RADARR_API_KEY = os.environ.get("RADARR_API_KEY", "")
+RADARR_CONFIG = os.environ.get("RADARR_CONFIG", "/radarr/config.xml")
+# Поиск пропущенного: как часто и сколько за раз (чтобы не нагружать трекеры)
+MISSING_SEARCH_HOURS = float(os.environ.get("MISSING_SEARCH_HOURS", "24"))
+MISSING_SEASONS_PER_RUN = int(os.environ.get("MISSING_SEASONS_PER_RUN", "10"))
+MISSING_MOVIES_PER_RUN = int(os.environ.get("MISSING_MOVIES_PER_RUN", "20"))
 
 # Отказы, которые означают только «часть серий уже есть»
 ALLOWED_REJECTION = re.compile(r"^(Existing file|Existing files)", re.I)
@@ -49,27 +60,38 @@ def log(msg):
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
 
 
-def api_key():
-    if SONARR_API_KEY:
-        return SONARR_API_KEY
-    with open(SONARR_CONFIG, encoding="utf-8") as f:
+def api_key(explicit, config):
+    if explicit:
+        return explicit
+    with open(config, encoding="utf-8") as f:
         m = re.search(r"<ApiKey>(\w+)</ApiKey>", f.read())
     if not m:
-        sys.exit(f"Не нашёл ApiKey в {SONARR_CONFIG}")
+        sys.exit(f"Не нашёл ApiKey в {config}")
     return m.group(1)
 
 
 KEY = None
+RADARR_KEY = None
 
 
-def call(path, data=None, method="GET", timeout=120):
+def _request(base, key, path, data=None, method="GET", timeout=120):
     body = None if data is None else json.dumps(data).encode()
     req = urllib.request.Request(
-        SONARR_URL + "/api/v3" + path, data=body, method=method,
-        headers={"X-Api-Key": KEY, "Content-Type": "application/json"})
+        base + "/api/v3" + path, data=body, method=method,
+        headers={"X-Api-Key": key, "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read()
         return json.loads(raw) if raw else None
+
+
+def call(path, data=None, method="GET", timeout=120):
+    """Запрос к Sonarr."""
+    return _request(SONARR_URL, KEY, path, data, method, timeout)
+
+
+def rcall(path, data=None, method="GET", timeout=120):
+    """Запрос к Radarr."""
+    return _request(RADARR_URL, RADARR_KEY, path, data, method, timeout)
 
 
 def load_state():
@@ -77,13 +99,14 @@ def load_state():
         with open(STATE_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {"grabbed": {}}
+        return {}
 
 
 def save_state(state):
     # держим историю 120 дней
     cutoff = time.time() - 120 * 86400
     state["grabbed"] = {k: v for k, v in state["grabbed"].items() if v.get("ts", 0) > cutoff}
+    state["searched"] = {k: v for k, v in state["searched"].items() if v > cutoff}
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=1)
@@ -117,10 +140,11 @@ def release_episodes(release, season_episode_numbers):
     return nums
 
 
-def missing_seasons():
-    """{(seriesId, season): {"title":..., "missing": set(episodeNumber)}}"""
+def missing_seasons(lookback_days=None):
+    """{(seriesId, season): {"title":..., "missing": set(episodeNumber)}}.
+    lookback_days=None — все вышедшие серии, иначе только вышедшие за столько дней."""
     now = datetime.now(timezone.utc)
-    since = now - timedelta(days=LOOKBACK_DAYS)
+    since = now - timedelta(days=lookback_days) if lookback_days else datetime.min.replace(tzinfo=timezone.utc)
     result, page = {}, 1
     while True:
         data = call(f"/wanted/missing?page={page}&pageSize=250&monitored=true&includeSeries=true")
@@ -296,8 +320,71 @@ def busy_seasons():
     return {(q.get("seriesId"), q.get("seasonNumber")) for q in queue_records()}
 
 
-def run_once(state):
+def search_old_seasons(state, recent):
+    """Сезоны, где серии вышли давно и так и не скачаны: та же логика, по несколько за раз,
+    начиная с тех, что дольше всего не проверялись."""
     seasons = missing_seasons()
+    busy = busy_seasons()
+    todo = [(k, v) for k, v in seasons.items() if k not in recent and k not in busy]
+    todo.sort(key=lambda kv: state["searched"].get(f"sonarr:{kv[0][0]}:{kv[0][1]}", 0))
+    log(f"Пропущенное в Sonarr: старых сезонов с недостающими сериями {len(todo)}, "
+        f"проверяю до {MISSING_SEASONS_PER_RUN}")
+    for i, ((sid, season), info) in enumerate(todo[:MISSING_SEASONS_PER_RUN]):
+        time.sleep(PAUSE_BETWEEN_SEARCHES)
+        try:
+            if (sid, season) in busy_seasons():
+                continue
+            process_season(sid, season, info, state)
+        except Exception as e:
+            log(f"{info['title']} S{season:02d}: ошибка — {e}")
+        state["searched"][f"sonarr:{sid}:{season}"] = time.time()
+        save_state(state)
+
+
+def search_missing_movies(state):
+    """Вышедшие, но не скачанные фильмы: Radarr ищет их только при добавлении и по RSS,
+    поэтому раз в сутки запускаем его собственный поиск по нескольким фильмам."""
+    movies, page = [], 1
+    while True:
+        data = rcall(f"/wanted/missing?page={page}&pageSize=250&monitored=true")
+        records = data.get("records", [])
+        movies += [m for m in records if m.get("isAvailable") and not m.get("hasFile")]
+        if page * 250 >= data.get("totalRecords", 0) or not records:
+            break
+        page += 1
+    queued = {q.get("movieId") for q in rcall("/queue?pageSize=1000").get("records", [])}
+    movies = [m for m in movies if m["id"] not in queued]
+    movies.sort(key=lambda m: state["searched"].get(f"radarr:{m['id']}", 0))
+    batch = movies[:MISSING_MOVIES_PER_RUN]
+    log(f"Пропущенное в Radarr: вышедших фильмов без файла {len(movies)}, ищу {len(batch)}")
+    if not batch:
+        return
+    rcall("/command", {"name": "MoviesSearch", "movieIds": [m["id"] for m in batch]}, "POST")
+    log("Radarr ищет: " + ", ".join(f"{m.get('title')} ({m.get('year')})" for m in batch))
+    now = time.time()
+    for m in batch:
+        state["searched"][f"radarr:{m['id']}"] = now
+    save_state(state)
+
+
+def run_missing(state, recent):
+    if time.time() - state.get("last_missing_run", 0) < MISSING_SEARCH_HOURS * 3600:
+        return
+    try:
+        search_old_seasons(state, recent)
+    except Exception as e:
+        log(f"Пропущенное в Sonarr: ошибка — {e}")
+    if RADARR_URL:
+        try:
+            search_missing_movies(state)
+        except Exception as e:
+            log(f"Пропущенное в Radarr: ошибка — {e}")
+    state["last_missing_run"] = time.time()
+    save_state(state)
+
+
+def run_once(state):
+    seasons = missing_seasons(LOOKBACK_DAYS)
     todo = [(k, v) for k, v in seasons.items() if k not in busy_seasons()]
     skipped = len(seasons) - len(todo)
     log(f"Сезонов с недостающими сериями: {len(seasons)} (уже качаются: {skipped}), "
@@ -317,6 +404,7 @@ def run_once(state):
         cleanup_queue()
     except Exception as e:
         log(f"Очистка очереди: ошибка — {e}")
+    run_missing(state, set(seasons))
 
 
 def beat():
@@ -329,10 +417,16 @@ def beat():
 
 
 def main():
-    global KEY
-    KEY = api_key()
-    log(f"Старт: Sonarr {SONARR_URL}, раз в {INTERVAL_HOURS} ч, серии за {LOOKBACK_DAYS} дн.")
+    global KEY, RADARR_KEY
+    KEY = api_key(SONARR_API_KEY, SONARR_CONFIG)
+    if RADARR_URL:
+        RADARR_KEY = api_key(RADARR_API_KEY, RADARR_CONFIG)
+    log(f"Старт: Sonarr {SONARR_URL}, раз в {INTERVAL_HOURS} ч, серии за {LOOKBACK_DAYS} дн.; "
+        f"пропущенное раз в {MISSING_SEARCH_HOURS:g} ч"
+        + (f", Radarr {RADARR_URL}" if RADARR_URL else ", Radarr не подключён"))
     state = load_state()
+    state.setdefault("grabbed", {})
+    state.setdefault("searched", {})
     beat()
     if STARTUP_DELAY and not RUN_ONCE:
         log(f"Жду {STARTUP_DELAY} с, пока Sonarr перечитает очередь…")

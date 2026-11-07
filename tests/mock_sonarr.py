@@ -1,4 +1,4 @@
-"""A tiny fake Sonarr API used by the smoke test.
+"""A tiny fake Sonarr and Radarr API used by the smoke test.
 
 It serves one airing season with an updated pack that Sonarr would reject only
 because part of the season is on disk, a few releases that must be ignored, and
@@ -8,12 +8,14 @@ Writes every POST/DELETE it receives to stderr so the test can assert on them.
 import json
 import os
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 KEY = os.environ.get("MOCK_API_KEY", "testkey")
 PORT = int(os.environ.get("MOCK_PORT", "18989"))
+RADARR_PORT = int(os.environ.get("MOCK_RADARR_PORT", "17878"))
 now = datetime.now(timezone.utc)
 
 
@@ -32,7 +34,7 @@ MISSING = ([ep(22, 18, e, -30 + e, "Always Sunny") for e in range(6, 11)]
            + [ep(22, 19, 1, 20, "Always Sunny")]         # not aired yet: ignored
            + [ep(5, 2, 4, -3, "Busy Show")]              # already downloading: skipped
            + [ep(26, 1, e, -30 + 7 * e, "Treasure Island (2026)") for e in range(1, 5)])
-EPISODES = {(22, 18): list(range(1, 11)), (26, 1): list(range(1, 7))}
+EPISODES = {(22, 18): list(range(1, 11)), (26, 1): list(range(1, 7)), (22, 5): list(range(1, 11))}
 SERIES = {22: {"title": "It's Always Sunny in Philadelphia", "year": 2005, "qualityProfileId": 7},
           26: {"title": "Treasure Island (2026)", "year": 2026, "qualityProfileId": 7}}
 PROFILES = {7: {"items": [
@@ -55,6 +57,11 @@ RELEASES = {(22, 18): [
      "title": "Sunny S18E01-10 1080p RUS", "approved": False, "fullSeason": True, "episodeNumbers": [],
      "rejections": ["Not enough seeders: 0. Minimum seeders: 3", EXISTING],
      "customFormatScore": 20000, "seeders": 0, "size": 12000},
+], (22, 5): [
+    # old season: an ordinary full-season pack Sonarr approves -> picked by the daily missing search
+    {"guid": "https://tracker/topic?t=888", "indexerId": 1, "indexer": "Tracker A",
+     "title": "Sunny / S5E1-10 of 10 [WEB-DL 1080p] RUS", "approved": True, "fullSeason": True,
+     "episodeNumbers": [], "rejections": [], "customFormatScore": 20000, "seeders": 12, "size": 15000},
 ], (26, 1): [
     # Sonarr не сопоставил из-за года в названии сериала -> должен быть выбран этот
     {"guid": "https://tracker/topic?t=444", "indexerId": 5, "indexer": "Tracker D",
@@ -95,6 +102,13 @@ QUEUE = (
         "episode": {"hasFile": False}}])
 
 
+# Radarr: one available missing movie, one not yet available, one already downloading
+MOVIES = [{"id": 50, "title": "Kung Fu Soccer", "year": 2026, "isAvailable": True, "hasFile": False},
+          {"id": 77, "title": "Other Mommy", "year": 2026, "isAvailable": False, "hasFile": False},
+          {"id": 60, "title": "Busy Movie", "year": 2025, "isAvailable": True, "hasFile": False}]
+RADARR_QUEUE = [{"id": 1, "movieId": 60, "title": "Busy.Movie.2025.mkv"}]
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -113,6 +127,12 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         path = url.path
+        if self.server.server_port == RADARR_PORT:
+            if path.endswith("/wanted/missing"):
+                return self.send({"page": 1, "totalRecords": len(MOVIES), "records": MOVIES})
+            if path.endswith("/queue"):
+                return self.send({"records": RADARR_QUEUE})
+            return self.send({"error": path}, 404)
         key = (int(q.get("seriesId", 0)), int(q.get("seasonNumber", 0)))
         if path.endswith("/wanted/missing"):
             page, size = int(q["page"]), int(q["pageSize"])
@@ -135,7 +155,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _record(self):
         length = int(self.headers.get("Content-Length") or 0)
-        sys.stderr.write(f"{self.command} {self.path} {self.rfile.read(length).decode()}\n")
+        app = "RADARR " if self.server.server_port == RADARR_PORT else ""
+        sys.stderr.write(f"{app}{self.command} {self.path} {self.rfile.read(length).decode()}\n")
         sys.stderr.flush()
 
     def do_POST(self):
@@ -148,4 +169,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=HTTPServer(("0.0.0.0", RADARR_PORT), Handler).serve_forever, daemon=True).start()
     HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
