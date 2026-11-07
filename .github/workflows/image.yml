@@ -53,6 +53,11 @@ jobs:
           python3 tests/mock_sonarr.py 2> mock.log &
           sleep 1
           mkdir -m 777 data
+          cat > data/remap.json <<'JSON'
+          {"JoJo's Bizarre Adventure (2012)": [
+            {"names": ["Steel Ball Run", "Стальной шар"], "tracker_season": 7, "season": 6},
+            {"names": ["Stone Ocean"], "tracker_season": 6, "season": 5}]}
+          JSON
           docker run --rm --network host -u 1000:1000 -v "$PWD/data:/data" \
             -e SONARR_URL=http://127.0.0.1:18989 -e SONARR_API_KEY=testkey \
             -e RADARR_URL=http://127.0.0.1:17878 -e RADARR_API_KEY=testkey \
@@ -63,7 +68,11 @@ jobs:
           grep -q 'POST /api/v3/release {"guid": "https://tracker/topic?t=111"' mock.log
           grep -q 'POST /api/v3/release {"guid": "https://tracker/topic?t=444", "indexerId": 5, "seriesId": 26}' mock.log
           grep -q 'POST /api/v3/release {"guid": "https://tracker/topic?t=888"' mock.log
-          [ "$(grep -c '^POST' mock.log)" = 3 ] || { echo "expected exactly three grabs"; exit 1; }
+          grep -q 'POST /api/v3/release {"guid": "https://tracker/topic?t=901", "indexerId": 1, "seriesId": 8, "episodeIds": \[80601, 80602, 80603, 80604, 80605, 80606, 80607, 80608\], "shouldOverride": true' mock.log
+          grep 'POST /api/v3/command {"name": "ManualImport"' mock.log | grep -q '"episodeIds": \[80502\].*"episodeIds": \[80503\]'
+          ! grep 'ManualImport' mock.log | grep -q '80501' || { echo "imported an episode that is already on disk"; exit 1; }
+          [ "$(grep -c '^POST /api/v3/release' mock.log)" = 4 ] || { echo "expected exactly four grabs"; exit 1; }
+          [ "$(grep -c '^POST' mock.log)" = 5 ] || { echo "expected four grabs and one manual import"; exit 1; }
           grep -q 'RADARR POST /api/v3/command {"name": "MoviesSearch", "movieIds": \[50\]}' mock.log
           [ "$(grep -c '^RADARR' mock.log)" = 1 ] || { echo "expected exactly one Radarr search"; exit 1; }
           grep -q 'DELETE /api/v3/queue/bulk.*removeFromClient=false.*\[101, 102, 103\]' mock.log

@@ -11,6 +11,9 @@ Sonarr отклоняет обновлённую раздачу целиком, 
   3. отправляет её в Sonarr на скачивание (как ручной выбор в интерактивном поиске);
   4. убирает из очереди загрузки, у которых новые серии импортированы, а старые
      висят с «Not an upgrade».
+Для сериалов, которые трекеры нумеруют иначе, чем Sonarr (обычно аниме: «Steel Ball Run (S7)» —
+это 6-й сезон JoJo в Sonarr), есть таблица соответствий REMAP_FILE: по ней раздача берётся с явно
+указанными сериями, а файлы импортируются вручную, если Sonarr не поймёт их сам.
 Раз в сутки дополнительно ищет пропущенное, до которого Sonarr и Radarr сами не
 возвращаются: старые сезоны с недостающими сериями (той же логикой) и вышедшие, но не
 скачанные фильмы в Radarr.
@@ -51,6 +54,8 @@ RADARR_CONFIG = os.environ.get("RADARR_CONFIG", "/radarr/config.xml")
 MISSING_SEARCH_HOURS = float(os.environ.get("MISSING_SEARCH_HOURS", "24"))
 MISSING_SEASONS_PER_RUN = int(os.environ.get("MISSING_SEASONS_PER_RUN", "10"))
 MISSING_MOVIES_PER_RUN = int(os.environ.get("MISSING_MOVIES_PER_RUN", "20"))
+# Таблица соответствий для сериалов, которые трекеры нумеруют не так, как Sonarr (обычно аниме)
+REMAP_FILE = os.environ.get("REMAP_FILE", "/data/remap.json")
 
 # Отказы, которые означают только «часть серий уже есть»
 ALLOWED_REJECTION = re.compile(r"^(Existing file|Existing files)", re.I)
@@ -212,9 +217,89 @@ def series_profile(series_id):
             for sub in item.get("items") or []:
                 allowed.add(sub["quality"]["name"])
         bare = re.sub(r"\s*\(\d{4}\)\s*$", "", series.get("title", ""))
+        names = {norm(bare)} | {norm(re.sub(r"\s*\(\d{4}\)\s*$", "", a.get("title", "")))
+                                for a in series.get("alternateTitles") or []}
         _profiles[series_id] = {"title": norm(bare), "year": str(series.get("year") or ""),
-                                "allowed": allowed}
+                                "allowed": allowed, "names": {n for n in names if len(n) >= 4},
+                                "full_title": series.get("title", ""),
+                                "anime": series.get("seriesType") == "anime"}
     return _profiles[series_id]
+
+
+# --- Таблица соответствий (remap.json) ---------------------------------------------------
+# {"JoJo's Bizarre Adventure (2012)": [
+#     {"names": ["Steel Ball Run", "Стальной шар"], "tracker_season": 7, "season": 6}]}
+# Работает только для перечисленных сериалов и сезонов и только когда Sonarr сам ничего не нашёл.
+
+_remap = {"mtime": None, "data": {}}
+
+
+def remap_rules(series_id, season):
+    """Правила таблицы для этого сезона сериала (пустой список — сериала в таблице нет)."""
+    try:
+        mtime = os.path.getmtime(REMAP_FILE)
+    except OSError:
+        return []
+    if mtime != _remap["mtime"]:
+        try:
+            with open(REMAP_FILE, encoding="utf-8") as f:
+                raw = json.load(f)
+            _remap["data"] = {norm(k): v for k, v in raw.items() if isinstance(v, list)}
+            log(f"Таблица соответствий: {REMAP_FILE}, сериалов {len(_remap['data'])}")
+        except Exception as e:
+            log(f"Таблица соответствий {REMAP_FILE} не читается, пропускаю: {e}")
+            _remap["data"] = {}
+        _remap["mtime"] = mtime
+    rules = _remap["data"].get(norm(series_profile(series_id)["full_title"]), [])
+    return [r for r in rules if r.get("season") == season and r.get("names")]
+
+
+NOT_VIDEO = re.compile(r"\b(manga|манга|главы|глава|chapters?|cbr|cbz|ранобэ|light novel|артбук|artbook|ost)\b", re.I)
+# Отказы Sonarr, которые означают только «не понял, что это за сериал/сезон/серии»
+REMAP_REJECTION = re.compile(r"^(Unknown Series|Wrong season|Episode wasn't requested|.*not requested"
+                             r"|Unable to (parse|identify)|Existing file)", re.I)
+TITLE_SEASON = re.compile(r"(?:\bS|\bSeason\s*|\bсезон\s*|\bTV-?)(\d{1,2})(?=E\d|\b|\))", re.I)
+
+
+def title_episodes(title):
+    """Номера серий из названия раздачи: S7E1-8, [01-08 из XX], (1—7), [08 из 12]."""
+    nums = set()
+    for a, b in re.findall(r"\bS\d{1,2}E(\d{1,3})(?:\s*-\s*E?(\d{1,3}))?", title, re.I):
+        nums |= set(range(int(a), int(b or a) + 1))
+    # «из XX» Prowlarr иногда отдаёт без «из» (кириллица вырезана): [01-07  XX]
+    of = r"(?:\s*(?:из|of)\s*|\s+)[\dXxх?]+\s*"
+    for a, b in re.findall(r"[\[(]\s*(\d{1,3})\s*[-–—]\s*(\d{1,3})\s*(?:" + of + r")?[\])]", title):
+        nums |= set(range(int(a), int(b) + 1))
+    if not nums:
+        for a in re.findall(r"\[\s*(\d{1,3})" + of + r"\]", title):
+            nums.add(int(a))
+    return nums
+
+
+def remap_ok(r, rules, series_id, season_nums):
+    """Серии раздачи по таблице соответствий или None, если раздача не подходит под правило."""
+    title = r.get("title", "")
+    rej = rejection_texts(r)
+    if not rej or not all(REMAP_REJECTION.search(x) for x in rej):
+        return None, None   # отказ по качеству, размеру, чёрному списку и т.п. — не трогаем
+    if NOT_VIDEO.search(title):
+        return None, None
+    prof = series_profile(series_id)
+    if (r.get("quality") or {}).get("quality", {}).get("name") not in prof["allowed"]:
+        return None, None
+    if (r.get("seeders") or 0) < MIN_SEEDERS:
+        return None, None
+    ntitle = norm(title)
+    for rule in rules:
+        if not any(norm(n) and norm(n) in ntitle for n in rule["names"]):
+            continue
+        seasons = {int(s) for s in TITLE_SEASON.findall(title)}
+        if seasons - {rule.get("tracker_season"), rule["season"]}:
+            continue   # в названии другой сезон
+        eps = title_episodes(title)
+        if eps and eps <= set(season_nums):
+            return eps, rule
+    return None, None
 
 
 def unknown_series_ok(r, season, series_id):
@@ -240,26 +325,36 @@ def process_season(series_id, season, info, state):
     season_nums = [e["episodeNumber"] for e in episodes]
     log(f"{label}: не хватает серий {sorted(missing)}, ищу раздачи…")
 
-    releases = call(f"/release?seriesId={series_id}&seasonNumber={season}", timeout=600)
+    # аниме Sonarr ищет по каждой серии отдельно, под всеми названиями — это долго
+    timeout = 1200 if series_profile(series_id).get("anime") else 600
+    releases = call(f"/release?seriesId={series_id}&seasonNumber={season}", timeout=timeout)
     topics = grabbed_topics(series_id, season)
+    rules = remap_rules(series_id, season)
 
-    candidates, reasons = [], {}
+    candidates, reasons, foreign = [], {}, 0
     for r in releases:
         rej = rejection_texts(r)
+        remap_eps = rule = None
         if r.get("approved") or (rej and all(ALLOWED_REJECTION.search(x) for x in rej)):
             matched = 1   # Sonarr распознал и проверил раздачу сам
         elif rej and all(UNKNOWN_SERIES.search(x) for x in rej) and unknown_series_ok(r, season, series_id):
             matched = 0   # сериал указываем вручную
+        elif rules and (remap_eps := remap_ok(r, rules, series_id, season_nums))[0]:
+            remap_eps, rule = remap_eps
+            matched = -1  # по таблице соответствий: только если обычных вариантов нет
         else:
             for x in rej:
                 key = re.split(r"[:(]", x, maxsplit=1)[0].strip()
                 reasons[key] = reasons.get(key, 0) + 1
+            if rej and all(REMAP_REJECTION.search(x) and not ALLOWED_REJECTION.search(x) for x in rej) \
+                    and any(n in norm(r.get("title", "")) for n in series_profile(series_id)["names"]):
+                foreign += 1   # название сериала есть, а Sonarr не понял сезон/сериал
             continue
         # Sonarr ставит downloadAllowed=false всем раздачам, которые не сопоставил с сериалом;
         # при скачивании с явно указанным seriesId он этот флаг не проверяет
-        if matched and r.get("downloadAllowed") is False:
+        if matched == 1 and r.get("downloadAllowed") is False:
             continue
-        covers = release_episodes(r, season_nums) & missing
+        covers = (remap_eps if matched == -1 else release_episodes(r, season_nums)) & missing
         if not covers:
             continue
         version = f"{r.get('guid')}|{r.get('size')}"
@@ -274,22 +369,32 @@ def process_season(series_id, season, info, state):
             1 if RUSSIAN_MARK.search(r.get("title", "")) else 0,
             quality.get("resolution") or 0,
             r.get("seeders") or 0,
-            r, covers, version))
+            r, covers, version, remap_eps))
 
     if not candidates:
         top = sorted(reasons.items(), key=lambda kv: -kv[1])[:3]
         why = "; ".join(f"{k} ×{v}" for k, v in top) if top else "раздач не найдено"
         log(f"{label}: подходящих раздач нет (найдено {len(releases)}; частые отказы: {why})")
+        if foreign and not rules:
+            log(f"{label}: похоже, трекеры нумеруют этот сезон иначе, чем Sonarr — раздач с названием "
+                f"сериала, отклонённых как другой сезон или неизвестный сериал: {foreign}. Если так, добавьте "
+                f"правило в {REMAP_FILE} (см. README)")
         return False
 
     candidates.sort(key=lambda c: c[:7], reverse=True)
-    matched, n, same, score, _ru, _res, seeds, r, covers, version = candidates[0]
+    matched, n, same, score, _ru, _res, seeds, r, covers, version, remap_eps = candidates[0]
     body = {"guid": r["guid"], "indexerId": r["indexerId"]}
-    if not matched:
+    if matched == 0:
         body["seriesId"] = series_id   # Sonarr сам сопоставит серии по разобранным номерам
+    elif matched == -1:
+        # как «выбрать сериал и серии вручную» в интерактивном поиске
+        ids = [e["id"] for e in episodes if e["episodeNumber"] in remap_eps]
+        body.update(seriesId=series_id, episodeIds=ids, shouldOverride=True,
+                    quality=r.get("quality"), languages=r.get("languages") or [])
     what = (f"{label}: «{r['title'][:140]}» [{r.get('indexer')}] — новые серии {sorted(covers)}, "
             f"очки {score}, сиды {seeds}{', та же тема' if same else ''}"
-            f"{', сериал указан вручную' if not matched else ''}")
+            f"{', сериал указан вручную' if matched == 0 else ''}"
+            f"{', по таблице соответствий' if matched == -1 else ''}")
     call("/release", body, "POST", timeout=180)
     state["grabbed"][version] = {"ts": time.time(), "title": r["title"], "series": label}
     save_state(state)
@@ -337,6 +442,76 @@ def cleanup_queue():
         call("/queue/bulk?removeFromClient=false&blocklist=false&skipRedownload=true",
              {"ids": [q["id"] for q in items]}, "DELETE")
         log(f"Убрано из очереди (раздача продолжает раздаваться): {name}")
+
+
+SAMPLE_MSG = re.compile(r"sample", re.I)
+NOT_EPISODE_NUMBERS = {480, 540, 576, 720, 264, 265}   # разрешения и кодеки, а не номера серий
+
+
+def file_episode(name, allowed_seasons):
+    """Номер серии из имени файла: S07E05, «Steel Ball Run - 05 [1080p]»; None — не понять."""
+    base = os.path.splitext(os.path.basename(name))[0]
+    m = re.findall(r"\bS(\d{1,2})E(\d{1,3})\b", base, re.I)
+    if m:
+        if len(m) != 1 or int(m[0][0]) not in allowed_seasons:
+            return None
+        return int(m[0][1])
+    base = re.sub(r"\[[^\]]*\]|\([^)]*\)|\{[^}]*\}", " ", base)
+    nums = [int(n) for n in re.findall(r"(?<![0-9A-Za-z])(\d{1,3})(?:v\d)?(?![0-9A-Za-z])", base)]
+    nums = [n for n in nums if n not in NOT_EPISODE_NUMBERS]
+    return nums[-1] if nums else None
+
+
+def import_remapped():
+    """Загрузки, взятые по таблице соответствий, Sonarr часто не может импортировать сам:
+    в файлах «S07E05», а такого сезона у него нет. Импортируем вручную по той же таблице,
+    только если номер каждого файла читается однозначно и все номера есть в сезоне."""
+    groups = {}
+    for q in queue_records():
+        if q.get("status") != "completed" or not q.get("statusMessages"):
+            continue
+        if q.get("trackedDownloadState") not in ("importBlocked", "importPending"):
+            continue
+        sid, season = q.get("seriesId"), q.get("seasonNumber")
+        if sid is None or season is None or not remap_rules(sid, season):
+            continue
+        groups.setdefault(q.get("downloadId"), q)
+    for dl, q in groups.items():
+        sid, season = q["seriesId"], q["seasonNumber"]
+        rule = remap_rules(sid, season)[0]
+        label = f"{series_profile(sid)['full_title']} S{season:02d}"
+        allowed = {rule["season"], rule.get("tracker_season"), 1} - {None}
+        episodes = {e["episodeNumber"]: e for e in call(f"/episode?seriesId={sid}&seasonNumber={season}")}
+        items = call(f"/manualimport?downloadId={dl}&seriesId={sid}&filterExistingFiles=true", timeout=300) or []
+        files, problem = [], None
+        for it in items:
+            if any(SAMPLE_MSG.search(x) for x in rejection_texts(it)):
+                continue
+            num = file_episode(it.get("relativePath") or it.get("path", ""), allowed)
+            if num is None or num not in episodes:
+                problem = f"не понял номер серии у «{os.path.basename(it.get('path', ''))}»"
+                break
+            files.append((num, it))
+        nums = [n for n, _ in files]
+        if not problem and len(set(nums)) != len(nums):
+            problem = f"повторяются номера серий {sorted(nums)}"
+        if problem:
+            log(f"{label}: «{q.get('title')}» не импортирую по таблице — {problem}; разберите вручную")
+            continue
+        todo = [(n, it) for n, it in files if not episodes[n].get("hasFile")]
+        if not todo:
+            if files and all(episodes[n].get("hasFile") for n in nums):
+                call("/queue/bulk?removeFromClient=false&blocklist=false&skipRedownload=true",
+                     {"ids": [x["id"] for x in queue_records() if x.get("downloadId") == dl]}, "DELETE")
+                log(f"Убрано из очереди (все серии уже есть, раздача продолжает раздаваться): {q.get('title')}")
+            continue
+        call("/command", {"name": "ManualImport", "importMode": "auto", "files": [{
+            "path": it["path"], "folderName": it.get("folderName"), "seriesId": sid,
+            "episodeIds": [episodes[n]["id"]], "quality": it.get("quality"),
+            "languages": it.get("languages") or [], "releaseGroup": it.get("releaseGroup"),
+            "indexerFlags": it.get("indexerFlags", 0), "releaseType": it.get("releaseType", "singleEpisode"),
+            "downloadId": dl} for n, it in todo]}, "POST")
+        log(f"{label}: импортирую по таблице соответствий серии {sorted(n for n, _ in todo)} из «{q.get('title')}»")
 
 
 def busy_seasons():
@@ -410,6 +585,10 @@ def run_missing(state, recent):
 
 def run_once(state):
     # сначала чистим очередь: зависшая неполная раздача иначе держит сезон «занятым»
+    try:
+        import_remapped()
+    except Exception as e:
+        log(f"Импорт по таблице соответствий: ошибка — {e}")
     try:
         cleanup_queue()
     except Exception as e:

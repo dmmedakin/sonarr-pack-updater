@@ -10,6 +10,8 @@ Sonarr rejects such an updated pack as a whole, because the episodes it already 
    Releases that Sonarr rejects as `Unknown Series` — typically because the series is called "Name (2026)" in Sonarr while trackers write just "Name" — are also considered, only if nothing Sonarr matched itself fits: the title must contain the series name **and** its year, the parsed season must match, the quality must be allowed by the series' profile and there must be at least `MIN_SEEDERS` seeders (Sonarr stops checking such releases, so the service checks this itself). They are grabbed with the series set explicitly, like choosing the series by hand in interactive search.
 4. at the start of every pass, removes finished downloads from Sonarr's queue when everything importable has been imported: the remaining files are "Not an upgrade", and episodes that were simply not in a partial pack (Sonarr expects the whole season from a torrent named `S01`) are missing. The torrent keeps seeding. Anything with another import problem is left alone. Without this a partial pack would stay in the queue and keep its season "busy".
 
+5. for series that trackers number differently from Sonarr — typically anime, where trackers count each part as its own season (JoJo's *Steel Ball Run* is "S7" on trackers and season 6 in Sonarr) — uses a remap table you write yourself (see below). Only listed series and seasons are affected, and only when nothing Sonarr matched itself fits. If a season keeps getting rejected releases that carry the series name ("Unknown Series", "Wrong season"), the log suggests adding a rule.
+
 Once a day (`MISSING_SEARCH_HOURS`) it also goes after missing items that Sonarr and Radarr never search for again on their own — both only watch RSS after an item is added:
 
 - **Sonarr:** monitored seasons whose missing episodes aired before `LOOKBACK_DAYS`, a few per day (`MISSING_SEASONS_PER_RUN`), least recently checked first, with the same logic as above.
@@ -63,9 +65,27 @@ Every pass logs each season it checks (with the most common rejection reasons wh
 | `MISSING_SEARCH_HOURS` | `24` | Hours between searches for older missing seasons and missing movies |
 | `MISSING_SEASONS_PER_RUN` | `10` | Older seasons checked per missing search |
 | `MISSING_MOVIES_PER_RUN` | `20` | Movies searched per missing search |
+| `REMAP_FILE` | `/data/remap.json` | Remap table for series that trackers number differently; optional, re-read when it changes |
 | `RUN_ONCE` | `false` | Do one pass and exit |
 
 State (what has been grabbed) is kept in `/data/state.json`. The container reports unhealthy if passes stop starting.
+
+## Remap table
+
+`/data/remap.json`, keyed by the series title exactly as in Sonarr:
+
+```json
+{
+  "JoJo's Bizarre Adventure (2012)": [
+    {"names": ["Steel Ball Run", "Стальной шар"], "tracker_season": 7, "season": 6}
+  ]
+}
+```
+
+- `season` — the season in Sonarr; `tracker_season` — how trackers number it (optional); `names` — what release titles contain.
+- A release is taken by a rule only if Sonarr rejected it **only** for not understanding the series, season or episodes; its title contains one of `names`; any season number in the title is `tracker_season` or `season`; the episodes can be read from the title (`S7E1-8`, `[01-08 из XX]`, `(1—7)`, `[08 из 12]`) and include a missing one; it is video (not manga or OST); its quality is allowed by the series profile and it has at least `MIN_SEEDERS` seeders.
+- It is grabbed with the series and episodes set explicitly, like "override" in interactive search. If Sonarr then cannot import the files (they are named `S07E05`), the service imports them itself — only when every file's episode number can be read unambiguously (`S07E05`, `S01E05` or a bare `- 05`), all of them exist in the season and none repeat; episodes already on disk are not replaced. Otherwise the download is left in the queue for you.
+- Anime searches are slow (Sonarr searches every episode under every title), so the service waits up to 20 minutes for them.
 
 ## Things to know
 
