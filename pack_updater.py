@@ -32,6 +32,8 @@ PAUSE_BETWEEN_SEARCHES = int(os.environ.get("PAUSE_BETWEEN_SEARCHES", "20"))
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE", "/tmp/heartbeat")
 RUN_ONCE = os.environ.get("RUN_ONCE", "false").lower() in ("1", "true", "yes")
+# После старта ждём, пока Sonarr перечитает очередь из торрент-клиента (важно при перезапуске стека)
+STARTUP_DELAY = int(os.environ.get("STARTUP_DELAY", "300"))
 
 # Отказы, которые означают только «часть серий уже есть»
 ALLOWED_REJECTION = re.compile(r"^(Existing file|Existing files)", re.I)
@@ -223,10 +225,13 @@ def cleanup_queue():
         log(f"Убрано из очереди (раздача продолжает раздаваться): {name}")
 
 
+def busy_seasons():
+    return {(q.get("seriesId"), q.get("seasonNumber")) for q in queue_records()}
+
+
 def run_once(state):
     seasons = missing_seasons()
-    busy = {(q.get("seriesId"), q.get("seasonNumber")) for q in queue_records()}
-    todo = [(k, v) for k, v in seasons.items() if k not in busy]
+    todo = [(k, v) for k, v in seasons.items() if k not in busy_seasons()]
     skipped = len(seasons) - len(todo)
     log(f"Сезонов с недостающими сериями: {len(seasons)} (уже качаются: {skipped}), "
         f"проверяю до {MAX_SEASONS_PER_RUN}")
@@ -234,6 +239,10 @@ def run_once(state):
         if i:
             time.sleep(PAUSE_BETWEEN_SEARCHES)
         try:
+            # очередь могла измениться, пока шли поиски по предыдущим сезонам
+            if (sid, season) in busy_seasons():
+                log(f"{info['title']} S{season:02d}: уже качается, пропускаю")
+                continue
             process_season(sid, season, info, state)
         except Exception as e:
             log(f"{info['title']} S{season:02d}: ошибка — {e}")
@@ -257,6 +266,10 @@ def main():
     KEY = api_key()
     log(f"Старт: Sonarr {SONARR_URL}, раз в {INTERVAL_HOURS} ч, серии за {LOOKBACK_DAYS} дн.")
     state = load_state()
+    beat()
+    if STARTUP_DELAY and not RUN_ONCE:
+        log(f"Жду {STARTUP_DELAY} с, пока Sonarr перечитает очередь…")
+        time.sleep(STARTUP_DELAY)
     while True:
         beat()
         try:
