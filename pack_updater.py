@@ -297,8 +297,13 @@ def process_season(series_id, season, info, state):
     return True
 
 
+PARTIAL_PACK_MSG = re.compile(r"expected in this release were not imported or missing from the release", re.I)
+
+
 def cleanup_queue():
-    """Убрать загрузки, где всё нужное импортировано, а остальное «не улучшение»."""
+    """Убрать из очереди законченные загрузки, у которых всё, что можно, уже импортировано:
+    остальные файлы — «не улучшение», а серии, которых в раздаче нет (раздача на часть
+    сезона, а Sonarr ждёт весь сезон по имени торрента), просто отсутствуют."""
     by_download = {}
     for q in queue_records():
         if q.get("status") != "completed":
@@ -307,12 +312,26 @@ def cleanup_queue():
             continue
         by_download.setdefault(q.get("downloadId") or q["id"], []).append(q)
     for dl, items in by_download.items():
-        msgs = [m for q in items for s in (q.get("statusMessages") or []) for m in (s.get("messages") or [])]
-        # Убираем только если Sonarr прямо пишет «не улучшение» и других проблем нет
-        if not msgs or not all(NOT_UPGRADE_MSG.search(m) for m in msgs):
+        # statusMessages одинаковые у всех записей загрузки: берём у первой
+        status = items[0].get("statusMessages") or []
+        if not status:
+            continue   # Sonarr ещё не пытался импортировать
+        partial, ok = False, True
+        for sm in status:
+            title, msgs = sm.get("title") or "", sm.get("messages") or []
+            if PARTIAL_PACK_MSG.search(title) and not msgs:
+                partial = True                      # общая строка «не все серии из раздачи»
+            elif msgs and all(NOT_UPGRADE_MSG.search(m) for m in msgs):
+                continue                            # файл не импортирован как «не улучшение»
+            else:
+                ok = False                          # любая другая проблема — оставляем человеку
+                break
+        if not ok:
             continue
-        all_have_files = all((q.get("episode") or {}).get("hasFile") for q in items)
-        if not all_have_files:
+        has_files = [bool((q.get("episode") or {}).get("hasFile")) for q in items]
+        # без строки о неполной раздаче все серии загрузки должны быть на диске;
+        # с ней достаточно, чтобы хотя бы одна серия из неё была на диске
+        if not (any(has_files) if partial else all(has_files)):
             continue
         name = items[0].get("title", dl)
         call("/queue/bulk?removeFromClient=false&blocklist=false&skipRedownload=true",
@@ -388,6 +407,11 @@ def run_missing(state, recent):
 
 
 def run_once(state):
+    # сначала чистим очередь: зависшая неполная раздача иначе держит сезон «занятым»
+    try:
+        cleanup_queue()
+    except Exception as e:
+        log(f"Очистка очереди: ошибка — {e}")
     seasons = missing_seasons(LOOKBACK_DAYS)
     todo = [(k, v) for k, v in seasons.items() if k not in busy_seasons()]
     skipped = len(seasons) - len(todo)
@@ -404,10 +428,6 @@ def run_once(state):
             process_season(sid, season, info, state)
         except Exception as e:
             log(f"{info['title']} S{season:02d}: ошибка — {e}")
-    try:
-        cleanup_queue()
-    except Exception as e:
-        log(f"Очистка очереди: ошибка — {e}")
     run_missing(state, set(seasons))
 
 

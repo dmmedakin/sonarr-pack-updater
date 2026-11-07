@@ -97,6 +97,17 @@ QUEUE = (
     + [{"id": 200, "seriesId": 31, "seasonNumber": 2, "downloadId": "HASH2", "title": "Waiting Show S02",
         "status": "completed", "trackedDownloadState": "importPending", "statusMessages": [],
         "episode": {"hasFile": True}}]
+    # partial pack: torrent name says S01 (6 episodes), the release had only 1-3; all of them imported
+    + [{"id": 600 + e, "seriesId": 40, "seasonNumber": 1, "downloadId": "HASH6", "title": "Partial.Show.S01",
+        "status": "completed", "trackedDownloadState": "importBlocked",
+        "statusMessages": [{"title": "One or more episodes expected in this release were not imported or missing from the release", "messages": []}],
+        "episode": {"hasFile": e <= 3}} for e in range(1, 7)]
+    # partial pack where a file really failed to import -> must stay
+    + [{"id": 700 + e, "seriesId": 41, "seasonNumber": 1, "downloadId": "HASH7", "title": "Broken.Partial.S01",
+        "status": "completed", "trackedDownloadState": "importBlocked",
+        "statusMessages": [{"title": "One or more episodes expected in this release were not imported or missing from the release", "messages": []},
+                           {"title": "e02.mkv", "messages": ["Sample", "Not an upgrade for existing episode file(s)"]}],
+        "episode": {"hasFile": e == 1}} for e in range(1, 4)]
     + [{"id": 300, "seriesId": 5, "seasonNumber": 2, "downloadId": "HASH3", "title": "Busy Show S02",
         "status": "downloading", "trackedDownloadState": "downloading", "statusMessages": [],
         "episode": {"hasFile": False}}])
