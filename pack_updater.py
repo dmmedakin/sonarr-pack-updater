@@ -253,7 +253,9 @@ def process_season(series_id, season, info, state):
                 key = re.split(r"[:(]", x, maxsplit=1)[0].strip()
                 reasons[key] = reasons.get(key, 0) + 1
             continue
-        if r.get("downloadAllowed") is False:
+        # Sonarr ставит downloadAllowed=false всем раздачам, которые не сопоставил с сериалом;
+        # при скачивании с явно указанным seriesId он этот флаг не проверяет
+        if matched and r.get("downloadAllowed") is False:
             continue
         covers = release_episodes(r, season_nums) & missing
         if not covers:

@@ -67,25 +67,25 @@ RELEASES = {(22, 18): [
     {"guid": "https://tracker/topic?t=444", "indexerId": 5, "indexer": "Tracker D",
      "title": "Остров сокровищ / Treasure Island / S1E1-3 of 6 (2026) WEB-DL [H.264/1080p] RUS",
      "approved": False, "fullSeason": False, "seasonNumber": 1, "episodeNumbers": [1, 2, 3],
-     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 37, "size": 10000,
+     "rejections": UNKNOWN, "downloadAllowed": False, "customFormatScore": 0, "seeders": 37, "size": 10000,
      "quality": {"quality": {"name": "WEBDL-1080p", "resolution": 1080}}},
     # качество не из профиля
     {"guid": "https://tracker/topic?t=555", "indexerId": 1, "indexer": "Tracker A",
      "title": "Остров сокровищ / Treasure Island / S1E1-4 of 6 [2026, WEBRip] RUS",
      "approved": False, "fullSeason": False, "seasonNumber": 1, "episodeNumbers": [1, 2, 3, 4],
-     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 70, "size": 2900,
+     "rejections": UNKNOWN, "downloadAllowed": False, "customFormatScore": 0, "seeders": 70, "size": 2900,
      "quality": {"quality": {"name": "WEBRip-480p", "resolution": 480}}},
     # другой сериал с тем же названием (другой год)
     {"guid": "https://tracker/topic?t=666", "indexerId": 1, "indexer": "Tracker A",
      "title": "Остров сокровищ / Treasure Island / S1E1-4 of 4 [2012, WEB-DL 1080p] RUS",
      "approved": False, "fullSeason": True, "seasonNumber": 1, "episodeNumbers": [],
-     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 300, "size": 9000,
+     "rejections": UNKNOWN, "downloadAllowed": False, "customFormatScore": 0, "seeders": 300, "size": 9000,
      "quality": {"quality": {"name": "WEBDL-1080p", "resolution": 1080}}},
     # мало сидов
     {"guid": "https://tracker/topic?t=777", "indexerId": 3, "indexer": "Tracker C",
      "title": "Treasure Island [S01E01-04 of 06] (2026) WEB-DL 2160p RUS",
      "approved": False, "fullSeason": False, "seasonNumber": 1, "episodeNumbers": [1, 2, 3, 4],
-     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 1, "size": 20000,
+     "rejections": UNKNOWN, "downloadAllowed": False, "customFormatScore": 0, "seeders": 1, "size": 20000,
      "quality": {"quality": {"name": "WEBDL-2160p", "resolution": 2160}}},
 ]}
 HISTORY = {(22, 18): [{"eventType": "grabbed", "data": {"guid": "https://tracker/topic?t=111"}}]}
