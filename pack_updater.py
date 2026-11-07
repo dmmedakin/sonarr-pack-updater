@@ -25,6 +25,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -56,6 +57,8 @@ MISSING_SEASONS_PER_RUN = int(os.environ.get("MISSING_SEASONS_PER_RUN", "10"))
 MISSING_MOVIES_PER_RUN = int(os.environ.get("MISSING_MOVIES_PER_RUN", "20"))
 # Таблица соответствий для сериалов, которые трекеры нумеруют не так, как Sonarr (обычно аниме)
 REMAP_FILE = os.environ.get("REMAP_FILE", "/data/remap.json")
+# Необязательно: адрес push-монитора (например, Uptime Kuma), который дёргается после каждого прохода
+PUSH_URL = os.environ.get("PUSH_URL", "")
 
 # Отказы, которые означают только «часть серий уже есть»
 ALLOWED_REJECTION = re.compile(r"^(Existing file|Existing files)", re.I)
@@ -640,6 +643,18 @@ def wait_for_apps():
         time.sleep(pause)
 
 
+def push(msg):
+    """Отметка во внешний мониторинг: «проход прошёл». Ошибка здесь проход не ломает."""
+    if not PUSH_URL:
+        return
+    sep = "&" if "?" in PUSH_URL else "?"
+    url = PUSH_URL if "msg=" in PUSH_URL else PUSH_URL + sep + urllib.parse.urlencode({"status": "up", "msg": msg})
+    try:
+        urllib.request.urlopen(url, timeout=30).read()
+    except Exception as e:
+        log(f"Отметка в мониторинг не ушла: {e}")
+
+
 def beat():
     """Отметка для HEALTHCHECK: контейнер жив и проходы идут."""
     try:
@@ -666,8 +681,10 @@ def main():
     while True:
         beat()
         try:
+            started = time.time()
             run_once(state)
             pause = INTERVAL_HOURS * 3600
+            push(f"проход за {int(time.time() - started)} с")
         except Exception as e:
             pause = RETRY_MINUTES * 60
             log(f"Ошибка прохода: {e}. Повтор через {RETRY_MINUTES:g} мин.")

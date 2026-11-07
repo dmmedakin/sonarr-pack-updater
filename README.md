@@ -65,6 +65,7 @@ Every pass logs each season it checks (with the most common rejection reasons wh
 | `MISSING_SEARCH_HOURS` | `24` | Hours between searches for older missing seasons and missing movies |
 | `MISSING_SEASONS_PER_RUN` | `10` | Older seasons checked per missing search |
 | `MISSING_MOVIES_PER_RUN` | `20` | Movies searched per missing search |
+| `PUSH_URL` | — | Optional push monitor (e.g. an Uptime Kuma push URL) called after every successful pass |
 | `REMAP_FILE` | `/data/remap.json` | Remap table for series that trackers number differently; optional, re-read when it changes |
 | `RUN_ONCE` | `false` | Do one pass and exit |
 

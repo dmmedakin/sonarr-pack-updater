@@ -186,6 +186,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.startswith("/api/push/"):   # push-монитор (Uptime Kuma)
+            sys.stderr.write(f"PUSH {self.path}\n")
+            sys.stderr.flush()
+            return self.send({"ok": True})
         if self.headers.get("X-Api-Key") != KEY:
             return self.send({"error": "unauthorized"}, 401)
         url = urlparse(self.path)
