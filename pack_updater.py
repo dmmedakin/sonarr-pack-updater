@@ -36,6 +36,8 @@ RUN_ONCE = os.environ.get("RUN_ONCE", "false").lower() in ("1", "true", "yes")
 STARTUP_DELAY = int(os.environ.get("STARTUP_DELAY", "300"))
 # Если Sonarr недоступен, следующий проход — через столько минут, а не через INTERVAL_HOURS
 RETRY_MINUTES = float(os.environ.get("RETRY_MINUTES", "10"))
+# Минимум сидов для раздач, которые Sonarr не сопоставил с сериалом (его собственная проверка до них не доходит)
+MIN_SEEDERS = int(os.environ.get("MIN_SEEDERS", "3"))
 
 # Отказы, которые означают только «часть серий уже есть»
 ALLOWED_REJECTION = re.compile(r"^(Existing file|Existing files)", re.I)
@@ -158,6 +160,53 @@ def grabbed_topics(series_id, season):
     return guids
 
 
+UNKNOWN_SERIES = re.compile(r"^Unknown Series", re.I)
+RUSSIAN_MARK = re.compile(r"\b(RUS|Russian|MVO|DVO|AVO|Dub|Дубляж|Дублированный)\b|[А-Яа-яЁё]", re.I)
+
+
+def norm(text):
+    """Только буквы и цифры в нижнем регистре: «Treasure Island (2026)» -> «treasureisland2026»."""
+    return re.sub(r"[^0-9a-zа-яё]+", "", text.lower())
+
+
+_profiles = {}
+
+
+def series_profile(series_id):
+    """Название без года, год и разрешённые качества профиля сериала."""
+    if series_id not in _profiles:
+        series = call(f"/series/{series_id}")
+        profile = call(f"/qualityprofile/{series['qualityProfileId']}")
+        allowed = set()
+        for item in profile.get("items", []):
+            if not item.get("allowed"):
+                continue
+            if item.get("quality"):
+                allowed.add(item["quality"]["name"])
+            for sub in item.get("items") or []:
+                allowed.add(sub["quality"]["name"])
+        bare = re.sub(r"\s*\(\d{4}\)\s*$", "", series.get("title", ""))
+        _profiles[series_id] = {"title": norm(bare), "year": str(series.get("year") or ""),
+                                "allowed": allowed}
+    return _profiles[series_id]
+
+
+def unknown_series_ok(r, season, series_id):
+    """Раздача, которую Sonarr не сопоставил с сериалом (обычно из-за года в названии сериала).
+    Sonarr её дальше не проверял, поэтому проверяем сами: тот же сериал и год, сезон, качество, сиды."""
+    prof = series_profile(series_id)
+    title = norm(r.get("title", ""))
+    if not prof["title"] or prof["title"] not in title:
+        return False
+    if prof["year"] and prof["year"] not in r.get("title", ""):
+        return False   # защита от одноимённых сериалов других лет
+    if r.get("seasonNumber") != season:
+        return False
+    if (r.get("quality") or {}).get("quality", {}).get("name") not in prof["allowed"]:
+        return False
+    return (r.get("seeders") or 0) >= MIN_SEEDERS
+
+
 def process_season(series_id, season, info, state):
     title, missing = info["title"], info["missing"]
     label = f"{title} S{season:02d}"
@@ -168,11 +217,17 @@ def process_season(series_id, season, info, state):
     releases = call(f"/release?seriesId={series_id}&seasonNumber={season}", timeout=600)
     topics = grabbed_topics(series_id, season)
 
-    candidates = []
+    candidates, reasons = [], {}
     for r in releases:
         rej = rejection_texts(r)
-        # Берём одобренные раздачи и те, что отклонены ТОЛЬКО из-за уже имеющихся серий
-        if not r.get("approved") and not (rej and all(ALLOWED_REJECTION.search(x) for x in rej)):
+        if r.get("approved") or (rej and all(ALLOWED_REJECTION.search(x) for x in rej)):
+            matched = 1   # Sonarr распознал и проверил раздачу сам
+        elif rej and all(UNKNOWN_SERIES.search(x) for x in rej) and unknown_series_ok(r, season, series_id):
+            matched = 0   # сериал указываем вручную
+        else:
+            for x in rej:
+                key = re.split(r"[:(]", x, maxsplit=1)[0].strip()
+                reasons[key] = reasons.get(key, 0) + 1
             continue
         if r.get("downloadAllowed") is False:
             continue
@@ -182,22 +237,32 @@ def process_season(series_id, season, info, state):
         version = f"{r.get('guid')}|{r.get('size')}"
         if version in state["grabbed"]:
             continue
+        quality = (r.get("quality") or {}).get("quality", {})
         candidates.append((
+            matched,
             len(covers),
             1 if r.get("guid") in topics else 0,
             r.get("customFormatScore") or 0,
+            1 if RUSSIAN_MARK.search(r.get("title", "")) else 0,
+            quality.get("resolution") or 0,
             r.get("seeders") or 0,
             r, covers, version))
 
     if not candidates:
-        log(f"{label}: подходящих обновлённых раздач нет")
+        top = sorted(reasons.items(), key=lambda kv: -kv[1])[:3]
+        why = "; ".join(f"{k} ×{v}" for k, v in top) if top else "раздач не найдено"
+        log(f"{label}: подходящих раздач нет (найдено {len(releases)}; частые отказы: {why})")
         return False
 
-    candidates.sort(key=lambda c: c[:4], reverse=True)
-    n, same, score, seeds, r, covers, version = candidates[0]
+    candidates.sort(key=lambda c: c[:7], reverse=True)
+    matched, n, same, score, _ru, _res, seeds, r, covers, version = candidates[0]
+    body = {"guid": r["guid"], "indexerId": r["indexerId"]}
+    if not matched:
+        body["seriesId"] = series_id   # Sonarr сам сопоставит серии по разобранным номерам
     what = (f"{label}: «{r['title'][:140]}» [{r.get('indexer')}] — новые серии {sorted(covers)}, "
-            f"очки {score}, сиды {seeds}{', та же тема' if same else ''}")
-    call("/release", {"guid": r["guid"], "indexerId": r["indexerId"]}, "POST", timeout=180)
+            f"очки {score}, сиды {seeds}{', та же тема' if same else ''}"
+            f"{', сериал указан вручную' if not matched else ''}")
+    call("/release", body, "POST", timeout=180)
     state["grabbed"][version] = {"ts": time.time(), "title": r["title"], "series": label}
     save_state(state)
     log("Отправлено на скачивание: " + what)

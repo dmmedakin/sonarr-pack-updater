@@ -7,6 +7,7 @@ Sonarr rejects such an updated pack as a whole, because the episodes it already 
 1. finds monitored seasons with aired episodes that are still missing (only recent ones, see `LOOKBACK_DAYS`);
 2. runs Sonarr's interactive search for each such season and keeps releases that contain a missing episode and are either approved or rejected **only** because part of the season is on disk — releases rejected for quality, language, size, seeders and so on are left alone;
 3. picks the one with the most missing episodes (then the same tracker topic as before, then custom format score, then seeders) and sends it to Sonarr's download client, exactly like pressing download in interactive search;
+   Releases that Sonarr rejects as `Unknown Series` — typically because the series is called "Name (2026)" in Sonarr while trackers write just "Name" — are also considered, only if nothing Sonarr matched itself fits: the title must contain the series name **and** its year, the parsed season must match, the quality must be allowed by the series' profile and there must be at least `MIN_SEEDERS` seeders (Sonarr stops checking such releases, so the service checks this itself). They are grabbed with the series set explicitly, like choosing the series by hand in interactive search.
 4. removes finished downloads from Sonarr's queue when every episode in them is on disk and the only complaint left is "Not an upgrade". The torrent keeps seeding.
 
 When the updated pack lands in the same folder as the previous one, qBittorrent checks the files already there and downloads only the new episodes. Seasons that already have something in Sonarr's queue are skipped, and the same version of a release (guid + size) is never grabbed twice.
@@ -34,7 +35,7 @@ services:
     restart: unless-stopped
 ```
 
-Every pass logs each season it checks, each release it sends to Sonarr (`Отправлено на скачивание: …`) and each queue entry it removes (`Убрано из очереди: …`): `docker logs -f sonarr-pack-updater`.
+Every pass logs each season it checks (with the most common rejection reasons when nothing fits), each release it sends to Sonarr (`Отправлено на скачивание: …`) and each queue entry it removes (`Убрано из очереди: …`): `docker logs -f sonarr-pack-updater`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -47,6 +48,7 @@ Every pass logs each season it checks, each release it sends to Sonarr (`Отп�
 | `PAUSE_BETWEEN_SEARCHES` | `20` | Seconds between season searches, to be gentle with trackers |
 | `STARTUP_DELAY` | `300` | Seconds to wait after start before the first pass, so Sonarr has re-read its download client queue (matters when the whole stack restarts) |
 | `RETRY_MINUTES` | `10` | Minutes until the next pass when Sonarr could not be reached |
+| `MIN_SEEDERS` | `3` | Minimum seeders for `Unknown Series` releases |
 | `RUN_ONCE` | `false` | Do one pass and exit |
 
 State (what has been grabbed) is kept in `/data/state.json`. The container reports unhealthy if passes stop starting.

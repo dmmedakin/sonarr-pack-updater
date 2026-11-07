@@ -30,8 +30,17 @@ def ep(sid, season, num, days, title):
 MISSING = ([ep(22, 18, e, -30 + e, "Always Sunny") for e in range(6, 11)]
            + [ep(22, 5, 3, -4000, "Always Sunny")]      # too old: ignored
            + [ep(22, 19, 1, 20, "Always Sunny")]         # not aired yet: ignored
-           + [ep(5, 2, 4, -3, "Busy Show")])             # already downloading: skipped
-EPISODES = {(22, 18): list(range(1, 11))}
+           + [ep(5, 2, 4, -3, "Busy Show")]              # already downloading: skipped
+           + [ep(26, 1, e, -30 + 7 * e, "Treasure Island (2026)") for e in range(1, 5)])
+EPISODES = {(22, 18): list(range(1, 11)), (26, 1): list(range(1, 7))}
+SERIES = {22: {"title": "It's Always Sunny in Philadelphia", "year": 2005, "qualityProfileId": 7},
+          26: {"title": "Treasure Island (2026)", "year": 2026, "qualityProfileId": 7}}
+PROFILES = {7: {"items": [
+    {"quality": {"name": "WEBDL-720p"}, "items": [], "allowed": False},
+    {"name": "1080p-2160p", "allowed": True, "items": [
+        {"quality": {"name": n}, "items": [], "allowed": True}
+        for n in ("WEBDL-2160p", "WEBRip-2160p", "Bluray-2160p", "Bluray-1080p", "WEBDL-1080p", "WEBRip-1080p")]}]}}
+UNKNOWN = ["Unknown Series"]
 EXISTING = "Existing file on disk is of equal or higher preference: WEBDL-1080p v1"
 RELEASES = {(22, 18): [
     {"guid": "https://tracker/topic?t=111", "indexerId": 1, "indexer": "Tracker A",
@@ -46,6 +55,31 @@ RELEASES = {(22, 18): [
      "title": "Sunny S18E01-10 1080p RUS", "approved": False, "fullSeason": True, "episodeNumbers": [],
      "rejections": ["Not enough seeders: 0. Minimum seeders: 3", EXISTING],
      "customFormatScore": 20000, "seeders": 0, "size": 12000},
+], (26, 1): [
+    # Sonarr не сопоставил из-за года в названии сериала -> должен быть выбран этот
+    {"guid": "https://tracker/topic?t=444", "indexerId": 5, "indexer": "Tracker D",
+     "title": "Остров сокровищ / Treasure Island / S1E1-3 of 6 (2026) WEB-DL [H.264/1080p] RUS",
+     "approved": False, "fullSeason": False, "seasonNumber": 1, "episodeNumbers": [1, 2, 3],
+     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 37, "size": 10000,
+     "quality": {"quality": {"name": "WEBDL-1080p", "resolution": 1080}}},
+    # качество не из профиля
+    {"guid": "https://tracker/topic?t=555", "indexerId": 1, "indexer": "Tracker A",
+     "title": "Остров сокровищ / Treasure Island / S1E1-4 of 6 [2026, WEBRip] RUS",
+     "approved": False, "fullSeason": False, "seasonNumber": 1, "episodeNumbers": [1, 2, 3, 4],
+     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 70, "size": 2900,
+     "quality": {"quality": {"name": "WEBRip-480p", "resolution": 480}}},
+    # другой сериал с тем же названием (другой год)
+    {"guid": "https://tracker/topic?t=666", "indexerId": 1, "indexer": "Tracker A",
+     "title": "Остров сокровищ / Treasure Island / S1E1-4 of 4 [2012, WEB-DL 1080p] RUS",
+     "approved": False, "fullSeason": True, "seasonNumber": 1, "episodeNumbers": [],
+     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 300, "size": 9000,
+     "quality": {"quality": {"name": "WEBDL-1080p", "resolution": 1080}}},
+    # мало сидов
+    {"guid": "https://tracker/topic?t=777", "indexerId": 3, "indexer": "Tracker C",
+     "title": "Treasure Island [S01E01-04 of 06] (2026) WEB-DL 2160p RUS",
+     "approved": False, "fullSeason": False, "seasonNumber": 1, "episodeNumbers": [1, 2, 3, 4],
+     "rejections": UNKNOWN, "customFormatScore": 0, "seeders": 1, "size": 20000,
+     "quality": {"quality": {"name": "WEBDL-2160p", "resolution": 2160}}},
 ]}
 HISTORY = {(22, 18): [{"eventType": "grabbed", "data": {"guid": "https://tracker/topic?t=111"}}]}
 QUEUE = (
@@ -88,6 +122,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send([{"episodeNumber": e} for e in EPISODES.get(key, [])])
         elif path.endswith("/release"):
             self.send(RELEASES.get(key, []))
+        elif "/series/" in path and path.rsplit("/", 1)[-1].isdigit():
+            self.send(SERIES[int(path.rsplit("/", 1)[-1])])
+        elif "/qualityprofile/" in path:
+            self.send(PROFILES[int(path.rsplit("/", 1)[-1])])
         elif path.endswith("/history/series"):
             self.send(HISTORY.get(key, []))
         elif path.endswith("/queue"):
