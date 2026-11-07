@@ -391,7 +391,9 @@ def search_missing_movies(state):
 
 
 def run_missing(state, recent):
-    if time.time() - state.get("last_missing_run", 0) < MISSING_SEARCH_HOURS * 3600:
+    due = state.get("last_missing_run", 0) + MISSING_SEARCH_HOURS * 3600
+    if time.time() < due:
+        log("Поиск пропущенного: следующий " + datetime.fromtimestamp(due).strftime("%d.%m %H:%M"))
         return
     try:
         search_old_seasons(state, recent)
