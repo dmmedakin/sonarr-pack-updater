@@ -19,7 +19,6 @@ import re
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -28,14 +27,11 @@ SONARR_API_KEY = os.environ.get("SONARR_API_KEY", "")
 SONARR_CONFIG = os.environ.get("SONARR_CONFIG", "/sonarr/config.xml")
 INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "3"))
 LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "60"))
-DRY_RUN = os.environ.get("DRY_RUN", "true").lower() in ("1", "true", "yes")
 MAX_SEASONS_PER_RUN = int(os.environ.get("MAX_SEASONS_PER_RUN", "15"))
 PAUSE_BETWEEN_SEARCHES = int(os.environ.get("PAUSE_BETWEEN_SEARCHES", "20"))
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE", "/tmp/heartbeat")
 RUN_ONCE = os.environ.get("RUN_ONCE", "false").lower() in ("1", "true", "yes")
-NTFY_URL = os.environ.get("NTFY_URL", "")        # например https://ntfy.example.com/sonarr
-NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
 
 # Отказы, которые означают только «часть серий уже есть»
 ALLOWED_REJECTION = re.compile(r"^(Existing file|Existing files)", re.I)
@@ -68,19 +64,6 @@ def call(path, data=None, method="GET", timeout=120):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read()
         return json.loads(raw) if raw else None
-
-
-def notify(text):
-    if not NTFY_URL or DRY_RUN:
-        return
-    headers = {"Title": "Sonarr: докачка сезона", "Tags": "tv"}
-    if NTFY_TOKEN:
-        headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
-    try:
-        urllib.request.urlopen(urllib.request.Request(
-            NTFY_URL, data=text.encode(), headers=headers, method="POST"), timeout=15)
-    except Exception as e:  # уведомление не критично
-        log(f"ntfy: не удалось отправить ({e})")
 
 
 def load_state():
@@ -210,14 +193,10 @@ def process_season(series_id, season, info, state):
     n, same, score, seeds, r, covers, version = candidates[0]
     what = (f"{label}: «{r['title'][:140]}» [{r.get('indexer')}] — новые серии {sorted(covers)}, "
             f"очки {score}, сиды {seeds}{', та же тема' if same else ''}")
-    if DRY_RUN:
-        log("[ТЕСТ] скачал бы: " + what)
-        return True
     call("/release", {"guid": r["guid"], "indexerId": r["indexerId"]}, "POST", timeout=180)
     state["grabbed"][version] = {"ts": time.time(), "title": r["title"], "series": label}
     save_state(state)
     log("Отправлено на скачивание: " + what)
-    notify(f"{label}: докачиваю серии {', '.join(map(str, sorted(covers)))}\n{r['title'][:200]}")
     return True
 
 
@@ -239,9 +218,6 @@ def cleanup_queue():
         if not all_have_files:
             continue
         name = items[0].get("title", dl)
-        if DRY_RUN:
-            log(f"[ТЕСТ] убрал бы из очереди (раздача остаётся в qBittorrent): {name}")
-            continue
         call("/queue/bulk?removeFromClient=false&blocklist=false&skipRedownload=true",
              {"ids": [q["id"] for q in items]}, "DELETE")
         log(f"Убрано из очереди (раздача продолжает раздаваться): {name}")
@@ -279,8 +255,7 @@ def beat():
 def main():
     global KEY
     KEY = api_key()
-    log(f"Старт: Sonarr {SONARR_URL}, раз в {INTERVAL_HOURS} ч, серии за {LOOKBACK_DAYS} дн., "
-        f"{'ТЕСТОВЫЙ РЕЖИМ (ничего не скачиваю)' if DRY_RUN else 'боевой режим'}")
+    log(f"Старт: Sonarr {SONARR_URL}, раз в {INTERVAL_HOURS} ч, серии за {LOOKBACK_DAYS} дн.")
     state = load_state()
     while True:
         beat()

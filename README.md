@@ -28,14 +28,13 @@ services:
       SONARR_CONFIG: /sonarr/config.xml   # or SONARR_API_KEY: ...
       INTERVAL_HOURS: "3"
       LOOKBACK_DAYS: "60"
-      DRY_RUN: "true"                     # log what would be done; set to false when it looks right
     volumes:
       - ./pack-updater:/data
       - /path/to/sonarr/config.xml:/sonarr/config.xml:ro
     restart: unless-stopped
 ```
 
-Start with `DRY_RUN=true`: every pass logs `[ТЕСТ] скачал бы: …` for each release it would grab and `[ТЕСТ] убрал бы из очереди: …` for each queue entry it would remove, and nothing is sent to Sonarr. Switch it to `false` once the choices look right.
+Every pass logs each season it checks, each release it sends to Sonarr (`Отправлено на скачивание: …`) and each queue entry it removes (`Убрано из очереди: …`): `docker logs -f sonarr-pack-updater`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -44,11 +43,8 @@ Start with `DRY_RUN=true`: every pass logs `[ТЕСТ] скачал бы: …` f
 | `SONARR_CONFIG` | `/sonarr/config.xml` | Sonarr's `config.xml`, mounted read-only |
 | `INTERVAL_HOURS` | `3` | Hours between passes |
 | `LOOKBACK_DAYS` | `60` | Only episodes that aired within this many days |
-| `DRY_RUN` | `true` | Only log, send nothing |
 | `MAX_SEASONS_PER_RUN` | `15` | Upper limit of season searches per pass |
 | `PAUSE_BETWEEN_SEARCHES` | `20` | Seconds between season searches, to be gentle with trackers |
-| `NTFY_URL` | — | Optional [ntfy](https://ntfy.sh) topic URL for a message on every grab |
-| `NTFY_TOKEN` | — | ntfy access token, if the topic needs one |
 | `RUN_ONCE` | `false` | Do one pass and exit |
 
 State (what has been grabbed) is kept in `/data/state.json`. The container reports unhealthy if passes stop starting.
