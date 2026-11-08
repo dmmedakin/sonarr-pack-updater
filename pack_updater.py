@@ -485,7 +485,10 @@ def import_remapped():
         label = f"{series_profile(sid)['full_title']} S{season:02d}"
         allowed = {rule["season"], rule.get("tracker_season"), 1} - {None}
         episodes = {e["episodeNumber"]: e for e in call(f"/episode?seriesId={sid}&seasonNumber={season}")}
-        items = call(f"/manualimport?downloadId={dl}&seriesId={sid}&filterExistingFiles=true", timeout=300) or []
+        # только downloadId: с seriesId Sonarr показывает файлы всей папки сериала в библиотеке
+        items = call(f"/manualimport?downloadId={dl}&filterExistingFiles=true", timeout=300) or []
+        library = (call(f"/series/{sid}").get("path") or "").rstrip("/") + "/"
+        items = [it for it in items if library == "/" or not str(it.get("path", "")).startswith(library)]
         files, problem = [], None
         for it in items:
             if any(SAMPLE_MSG.search(x) for x in rejection_texts(it)):

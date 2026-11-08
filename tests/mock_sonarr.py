@@ -41,7 +41,7 @@ HAS_FILE = {(8, 6, 1), (8, 5, 1)}
 SERIES = {22: {"title": "It's Always Sunny in Philadelphia", "year": 2005, "qualityProfileId": 7},
           26: {"title": "Treasure Island (2026)", "year": 2026, "qualityProfileId": 7},
           8: {"title": "JoJo's Bizarre Adventure (2012)", "year": 2012, "qualityProfileId": 7,
-              "seriesType": "anime", "alternateTitles": [{"title": "JoJo no Kimyou na Bouken"}]}}
+              "seriesType": "anime", "alternateTitles": [{"title": "JoJo no Kimyou na Bouken"}], "path": "/tv/JoJo"}}
 PROFILES = {7: {"items": [
     {"quality": {"name": "WEBDL-720p"}, "items": [], "allowed": False},
     {"name": "1080p-2160p", "allowed": True, "items": [
@@ -213,6 +213,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send([{"id": key[0] * 10000 + key[1] * 100 + e, "episodeNumber": e,
                         "hasFile": (key[0], key[1], e) in HAS_FILE} for e in EPISODES.get(key, [])])
         elif path.endswith("/manualimport"):
+            if "seriesId" in q:   # как настоящий Sonarr: с seriesId отдаёт файлы папки сериала, а не загрузки
+                return self.send([{"path": "/tv/JoJo/Season 1/JoJo - S01E13 - Title.mkv",
+                                   "relativePath": "JoJo - S01E13 - Title.mkv", "rejections": []}])
             self.send(MANUAL_IMPORT.get(q.get("downloadId"), []))
         elif path.endswith("/release"):
             self.send(RELEASES.get(key, []))
