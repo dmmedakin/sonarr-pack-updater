@@ -12,6 +12,8 @@ Sonarr rejects such an updated pack as a whole, because the episodes it already 
 
 5. for series that trackers number differently from Sonarr — typically anime, where trackers count each part as its own season (JoJo's *Steel Ball Run* is "S7" on trackers and season 6 in Sonarr) — uses a remap table you write yourself (see below). Only listed series and seasons are affected, and only when nothing Sonarr matched itself fits. If a season keeps getting rejected releases that carry the series name ("Unknown Series", "Wrong season"), the log suggests adding a rule.
 
+6. stops download loops in Sonarr and Radarr: when the very same release (same torrent hash) is grabbed again after it was already imported for that movie or episode, it is removed from the queue (or, if it already left the queue, marked failed) and blocklisted. Files and the torrent stay. This happens when a release scores more custom format points by its title than the imported file does by its file name (the title says `RUS, HDR10+`, the file name doesn't), so the same release looks like an upgrade every time. A grab after the file was deleted by hand or went missing is left alone; only grabs from the last 48 hours are considered.
+
 Once a day (`MISSING_SEARCH_HOURS`) it also goes after missing items that Sonarr and Radarr never search for again on their own — both only watch RSS after an item is added:
 
 - **Sonarr:** monitored seasons whose missing episodes aired before `LOOKBACK_DAYS`, a few per day (`MISSING_SEASONS_PER_RUN`), least recently checked first, with the same logic as above.

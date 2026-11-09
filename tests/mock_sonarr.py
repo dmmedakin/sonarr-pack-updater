@@ -170,7 +170,42 @@ QUEUE = (
 MOVIES = [{"id": 50, "title": "Kung Fu Soccer", "year": 2026, "isAvailable": True, "hasFile": False},
           {"id": 77, "title": "Other Mommy", "year": 2026, "isAvailable": False, "hasFile": False},
           {"id": 60, "title": "Busy Movie", "year": 2025, "isAvailable": True, "hasFile": False}]
-RADARR_QUEUE = [{"id": 1, "movieId": 60, "title": "Busy.Movie.2025.mkv"}]
+RADARR_QUEUE = [{"id": 1, "movieId": 60, "title": "Busy.Movie.2025.mkv"},
+                {"id": 5, "movieId": 122, "title": "The Mongoose (2026)", "downloadId": "F7A8C911"}]
+
+
+def hist(i, item_key, item, kind, hours, dl, title="", reason=None):
+    return {"id": i, item_key: item, "eventType": kind, "date": iso(-hours / 24), "downloadId": dl,
+            "sourceTitle": title, "data": {"reason": reason} if reason else {}}
+
+
+# одна и та же раздача по кругу: импортирована, взята снова — и ещё в очереди (хэш в другом регистре)
+MONGOOSE = "The Mongoose (2026) WEB-DL-HEVC 2160p | HDR | Sub RUS"
+RADARR_HISTORY = [
+    hist(1, "movieId", 122, "grabbed", 30, "F7A8C911", MONGOOSE),
+    hist(2, "movieId", 122, "downloadFolderImported", 25, "F7A8C911"),
+    hist(3, "movieId", 122, "grabbed", 2, "f7a8c911", MONGOOSE),
+    # файл удалён вручную — скачать ту же раздачу снова законно
+    hist(4, "movieId", 70, "grabbed", 40, "AAAA", "Restored.Movie.2025"),
+    hist(5, "movieId", 70, "downloadFolderImported", 39, "AAAA"),
+    hist(6, "movieId", 70, "movieFileDeleted", 20, None, reason="Manual"),
+    hist(7, "movieId", 70, "grabbed", 3, "AAAA", "Restored.Movie.2025"),
+    # петля давно закончилась — не трогаем
+    hist(8, "movieId", 71, "grabbed", 300, "BBBB", "Old.Loop.2024"),
+    hist(9, "movieId", 71, "downloadFolderImported", 299, "BBBB"),
+    hist(10, "movieId", 71, "grabbed", 200, "BBBB", "Old.Loop.2024"),
+]
+SONARR_HISTORY = [
+    # серия скачана, затем та же раздача взята и импортирована снова (замена «Upgrade») — петля, в очереди её уже нет
+    hist(501, "episodeId", 4401, "grabbed", 20, "CCCC", "Loop Show S01E01 | Sub RUS"),
+    hist(502, "episodeId", 4401, "downloadFolderImported", 19, "CCCC"),
+    hist(503, "episodeId", 4401, "grabbed", 10, "CCCC", "Loop Show S01E01 | Sub RUS"),
+    hist(504, "episodeId", 4401, "episodeFileDeleted", 9, None, reason="Upgrade"),
+    hist(505, "episodeId", 4401, "downloadFolderImported", 9, "CCCC"),
+    # обычная история: взяли, импортировали
+    hist(506, "episodeId", 4402, "grabbed", 5, "DDDD", "Fine Show S01E02"),
+    hist(507, "episodeId", 4402, "downloadFolderImported", 4, "DDDD"),
+]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -203,6 +238,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send({"page": 1, "totalRecords": len(MOVIES), "records": MOVIES})
             if path.endswith("/queue"):
                 return self.send({"records": RADARR_QUEUE})
+            if path.endswith("/history"):
+                return self.send({"page": 1, "records": RADARR_HISTORY})
             return self.send({"error": path}, 404)
         key = (int(q.get("seriesId", 0)), int(q.get("seasonNumber", 0)))
         if path.endswith("/wanted/missing"):
@@ -226,6 +263,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(PROFILES[int(path.rsplit("/", 1)[-1])])
         elif path.endswith("/history/series"):
             self.send(HISTORY.get(key, []))
+        elif path.endswith("/history"):
+            self.send({"page": 1, "records": SONARR_HISTORY})
         elif path.endswith("/queue"):
             self.send({"records": QUEUE})
         else:
