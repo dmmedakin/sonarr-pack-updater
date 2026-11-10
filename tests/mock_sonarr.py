@@ -170,7 +170,18 @@ QUEUE = (
 MOVIES = [{"id": 50, "title": "Kung Fu Soccer", "year": 2026, "isAvailable": True, "hasFile": False},
           {"id": 77, "title": "Other Mommy", "year": 2026, "isAvailable": False, "hasFile": False},
           {"id": 60, "title": "Busy Movie", "year": 2025, "isAvailable": True, "hasFile": False}]
-RADARR_QUEUE = [{"id": 1, "movieId": 60, "title": "Busy.Movie.2025.mkv"}]
+RADARR_QUEUE = [
+    {"id": 1, "movieId": 60, "title": "Busy.Movie.2025.mkv"},
+    # скачан, но не лучше файла на диске -> убрать
+    {"id": 2, "movieId": 61, "title": "Spider-Man (2026) WEB-DLRip 2160p.mkv", "status": "completed",
+     "trackedDownloadState": "importPending", "statusMessages": [{"title": "Spider-Man (2026) WEB-DLRip 2160p.mkv", "messages": [
+         "Not a Custom Format upgrade for existing movie file(s). New: [2160p] (6000) do not improve on Existing: [2160p, Russian Audio] (26000)"]}]},
+    # другая причина -> оставить человеку
+    {"id": 3, "movieId": 62, "title": "Odd.Movie.2026.mkv", "status": "completed", "trackedDownloadState": "importPending",
+     "statusMessages": [{"title": "Odd.Movie.2026.mkv", "messages": ["Not an upgrade for existing movie file(s)", "Sample"]}]},
+    # ещё качается -> не трогать
+    {"id": 4, "movieId": 63, "title": "Slow.Movie.2026.mkv", "status": "downloading", "trackedDownloadState": "downloading",
+     "statusMessages": []}]
 
 
 class Handler(BaseHTTPRequestHandler):

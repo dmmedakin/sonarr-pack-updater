@@ -520,6 +520,25 @@ def import_remapped():
         log(f"{label}: импортирую по таблице соответствий серии {sorted(n for n, _ in todo)} из «{q.get('title')}»")
 
 
+NOT_BETTER = re.compile(r"^Not (an|a Custom Format) upgrade for existing movie file", re.I)
+
+
+def cleanup_radarr_queue():
+    """Radarr узнаёт, что внутри раздачи, только скачав её: название обещало «RUS», а русской
+    дорожки нет, или файл не лучше того, что уже лежит. Такой фильм Radarr не импортирует и
+    оставляет в очереди навсегда. Убираем загрузку (файлы в библиотеке не трогаются) и помечаем
+    раздачу неподходящей — как Radarr сам делает с неудачными загрузками, — чтобы её не взяли снова."""
+    for q in rcall("/queue?pageSize=1000").get("records", []):
+        if q.get("status") != "completed" or q.get("trackedDownloadState") not in ("importPending", "importBlocked"):
+            continue
+        msgs = [m for s in q.get("statusMessages") or [] for m in s.get("messages") or []]
+        if not msgs or not all(NOT_BETTER.match(m) for m in msgs):
+            continue
+        rcall(f"/queue/{q['id']}?removeFromClient=true&blocklist=true&skipRedownload=true", method="DELETE")
+        log(f"Radarr: «{q.get('title')}» скачан, но не лучше файла, который уже есть — "
+            f"убрал из очереди и торрент-клиента, раздача помечена неподходящей ({msgs[0][:200]})")
+
+
 def busy_seasons():
     return {(q.get("seriesId"), q.get("seasonNumber")) for q in queue_records()}
 
@@ -599,6 +618,11 @@ def run_once(state):
         cleanup_queue()
     except Exception as e:
         log(f"Очистка очереди: ошибка — {e}")
+    if RADARR_URL:
+        try:
+            cleanup_radarr_queue()
+        except Exception as e:
+            log(f"Очистка очереди Radarr: ошибка — {e}")
     seasons = missing_seasons(LOOKBACK_DAYS)
     todo = [(k, v) for k, v in seasons.items() if k not in busy_seasons()]
     skipped = len(seasons) - len(todo)

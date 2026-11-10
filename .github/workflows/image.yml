@@ -75,7 +75,8 @@ jobs:
           [ "$(grep -c '^POST /api/v3/release' mock.log)" = 4 ] || { echo "expected exactly four grabs"; exit 1; }
           [ "$(grep -c '^POST' mock.log)" = 5 ] || { echo "expected four grabs and one manual import"; exit 1; }
           grep -q 'RADARR POST /api/v3/command {"name": "MoviesSearch", "movieIds": \[50\]}' mock.log
-          [ "$(grep -c '^RADARR' mock.log)" = 1 ] || { echo "expected exactly one Radarr search"; exit 1; }
+          grep -q 'RADARR DELETE /api/v3/queue/2?removeFromClient=true&blocklist=true&skipRedownload=true' mock.log
+          [ "$(grep -c '^RADARR' mock.log)" = 2 ] || { echo "expected one Radarr search and one queue cleanup"; exit 1; }
           grep -q 'DELETE /api/v3/queue/bulk.*removeFromClient=false.*\[101, 102, 103\]' mock.log
           grep -q 'DELETE /api/v3/queue/bulk.*removeFromClient=false.*\[601, 602, 603, 604, 605, 606\]' mock.log
           [ "$(grep -c '^DELETE' mock.log)" = 2 ] || { echo "expected exactly two queue cleanups"; exit 1; }
