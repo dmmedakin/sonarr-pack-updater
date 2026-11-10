@@ -117,7 +117,6 @@ def save_state(state):
     cutoff = time.time() - 120 * 86400
     state["grabbed"] = {k: v for k, v in state["grabbed"].items() if v.get("ts", 0) > cutoff}
     state["searched"] = {k: v for k, v in state["searched"].items() if v > cutoff}
-    state["loops"] = {k: v for k, v in state.get("loops", {}).items() if v > cutoff}
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=1)
@@ -521,55 +520,6 @@ def import_remapped():
         log(f"{label}: импортирую по таблице соответствий серии {sorted(n for n, _ in todo)} из «{q.get('title')}»")
 
 
-FILE_DELETED = ("movieFileDeleted", "episodeFileDeleted")
-LOOP_WINDOW_HOURS = 48
-
-
-def stop_regrab_loops(name, request, state):
-    """Одна и та же раздача (тот же хэш торрента) скачивается по кругу. Так бывает, когда
-    раздача по названию набирает больше очков, чем уже скачанный из неё файл по имени файла
-    (в названии «RUS, HDR10+», в имени файла — нет), и Radarr/Sonarr каждый раз считает её улучшением.
-    Повторное скачивание той же раздачи после её импорта — признак такой петли: убираем её из
-    очереди и вносим в чёрный список. Файлы и раздача в торрент-клиенте остаются."""
-    data = request("/history?page=1&pageSize=1000&sortKey=date&sortDirection=descending")
-    records = data.get("records", []) if isinstance(data, dict) else (data or [])
-    item_key = "movieId" if name == "Radarr" else "episodeId"
-    by_item = {}
-    for h in records:
-        if h.get(item_key) is not None:
-            by_item.setdefault(h[item_key], []).append(h)
-    since = datetime.now(timezone.utc) - timedelta(hours=LOOP_WINDOW_HOURS)
-    loops = {}
-    for events in by_item.values():
-        imported = set()
-        for h in sorted(events, key=lambda x: x.get("date") or ""):
-            kind, dl = str(h.get("eventType")), (h.get("downloadId") or "").upper()
-            if kind in FILE_DELETED and (h.get("data") or {}).get("reason") != "Upgrade":
-                imported.clear()   # файл удалили или он пропал — скачать заново законно
-            elif kind == "downloadFolderImported" and dl:
-                imported.add(dl)
-            elif kind == "grabbed" and dl in imported and (parse_dt(h.get("date")) or since) > since:
-                loops[dl] = h
-    if not loops:
-        return
-    handled = state.setdefault("loops", {})
-    queue = request("/queue?pageSize=1000").get("records", [])
-    for dl, h in loops.items():
-        mark = f"{name}:{dl}:{h.get('id')}"
-        if mark in handled:
-            continue
-        ids = [q["id"] for q in queue if (q.get("downloadId") or "").upper() == dl]
-        if ids:
-            request("/queue/bulk?removeFromClient=false&blocklist=true&skipRedownload=true", {"ids": ids}, "DELETE")
-        else:
-            request(f"/history/failed/{h['id']}", {}, "POST")
-        log(f"{name}: «{h.get('sourceTitle')}» уже скачана и импортирована, но взята снова — скачивание по кругу. "
-            + ("Убрал из очереди и внёс в чёрный список" if ids else "Внёс в чёрный список")
-            + "; файлы и раздача остаются")
-        handled[mark] = time.time()
-    save_state(state)
-
-
 def busy_seasons():
     return {(q.get("seriesId"), q.get("seasonNumber")) for q in queue_records()}
 
@@ -640,11 +590,6 @@ def run_missing(state, recent):
 
 
 def run_once(state):
-    for name, request in [("Sonarr", call)] + ([("Radarr", rcall)] if RADARR_URL else []):
-        try:
-            stop_regrab_loops(name, request, state)
-        except Exception as e:
-            log(f"{name}: проверка скачивания по кругу — ошибка: {e}")
     # сначала чистим очередь: зависшая неполная раздача иначе держит сезон «занятым»
     try:
         import_remapped()

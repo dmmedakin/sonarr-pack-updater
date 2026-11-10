@@ -73,11 +73,9 @@ jobs:
           grep 'POST /api/v3/command {"name": "ManualImport"' mock.log | grep -q '"episodeIds": \[80502\].*"episodeIds": \[80503\]'
           ! grep 'ManualImport' mock.log | grep -q '80501' || { echo "imported an episode that is already on disk"; exit 1; }
           [ "$(grep -c '^POST /api/v3/release' mock.log)" = 4 ] || { echo "expected exactly four grabs"; exit 1; }
-          [ "$(grep -c '^POST' mock.log)" = 6 ] || { echo "expected four grabs, one manual import, one regrab-loop blocklist"; exit 1; }
-          grep -q '^POST /api/v3/history/failed/503 ' mock.log
-          grep -q 'RADARR DELETE /api/v3/queue/bulk?removeFromClient=false&blocklist=true&skipRedownload=true {"ids": \[5\]}' mock.log
+          [ "$(grep -c '^POST' mock.log)" = 5 ] || { echo "expected four grabs and one manual import"; exit 1; }
           grep -q 'RADARR POST /api/v3/command {"name": "MoviesSearch", "movieIds": \[50\]}' mock.log
-          [ "$(grep -c '^RADARR' mock.log)" = 2 ] || { echo "expected one Radarr search and one regrab-loop blocklist"; exit 1; }
+          [ "$(grep -c '^RADARR' mock.log)" = 1 ] || { echo "expected exactly one Radarr search"; exit 1; }
           grep -q 'DELETE /api/v3/queue/bulk.*removeFromClient=false.*\[101, 102, 103\]' mock.log
           grep -q 'DELETE /api/v3/queue/bulk.*removeFromClient=false.*\[601, 602, 603, 604, 605, 606\]' mock.log
           [ "$(grep -c '^DELETE' mock.log)" = 2 ] || { echo "expected exactly two queue cleanups"; exit 1; }
